@@ -58,7 +58,9 @@ function flattenDoc(d: any): Record<string, any> {
 
 function toCSV(rows: Record<string, any>[]): string {
   if (!rows.length) return "";
-  const keys = Array.from(rows.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s; }, new Set<string>()));
+  const keySet = new Set<string>();
+  for (const r of rows) Object.keys(r).forEach(k => keySet.add(k));
+  const keys = Array.from(keySet);
   const esc = (v: any) => {
     if (v == null) return "";
     const s = String(v);
