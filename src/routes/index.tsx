@@ -327,7 +327,45 @@ function Index() {
     return buildPayrollRows(periods[0].docs, periods[0].label);
   }, [periods, employeeField, payrollDateField, numericFields, rangeMode]);
 
+  // Pivot: rows = employees, columns = period labels, cell = entries count or sum of a numeric field
+  const pivot = useMemo(() => {
+    if (rangeMode !== "range" || !employeeField || !periods.length) return null;
+    const empSet = new Set<string>();
+    const empMeta = new Map<string, { name: string; email: string }>();
+    const cells = new Map<string, Map<string, number>>(); // emp -> period -> value
+    for (const p of periods) {
+      for (const d of p.docs) {
+        const emp = String(d.data?.[employeeField] ?? "(unknown)");
+        empSet.add(emp);
+        if (!empMeta.has(emp)) {
+          const s = d.data ?? {};
+          empMeta.set(emp, { name: s.name ?? s.employeeName ?? s.fullName ?? "", email: s.email ?? "" });
+        }
+        if (!cells.has(emp)) cells.set(emp, new Map());
+        const row = cells.get(emp)!;
+        const prev = row.get(p.label) ?? 0;
+        const add = pivotMetric === "entries" ? 1 : (typeof d.data?.[pivotMetric] === "number" ? d.data[pivotMetric] : 0);
+        row.set(p.label, prev + add);
+      }
+    }
+    const employees = Array.from(empSet).sort();
+    const rows = employees.map(emp => {
+      const meta = empMeta.get(emp)!;
+      const row: Record<string, any> = { Employee: emp, Name: meta.name, Email: meta.email };
+      let total = 0;
+      for (const p of periods) {
+        const v = cells.get(emp)?.get(p.label) ?? 0;
+        row[p.label] = pivotMetric === "entries" ? v : Number(v.toFixed(2));
+        total += v;
+      }
+      row.Total = pivotMetric === "entries" ? total : Number(total.toFixed(2));
+      return row;
+    });
+    return { rows, periodLabels: periods.map(p => p.label) };
+  }, [rangeMode, periods, employeeField, pivotMetric]);
+
   const totalPeriodEntries = useMemo(() => periods.reduce((s, p) => s + p.docs.length, 0), [periods]);
+
 
   const payrollName = () => {
     const parts = ["payroll", selected ?? ""];
