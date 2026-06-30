@@ -739,8 +739,51 @@ function Index() {
                 </div>
               )}
 
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <div className="text-[11px] font-semibold tracking-wider text-gray-500">PREVIEW</div>
+                {rangeMode === "range" && pivot && (
+                  <div className="flex items-center gap-1 text-[11px] text-gray-500">
+                    <span>Cell value:</span>
+                    <select value={pivotMetric} onChange={e => setPivotMetric(e.target.value)}
+                      className="text-xs border border-gray-200 rounded px-1.5 py-1 bg-gray-50">
+                      <option value="entries">Entries count</option>
+                      {numericFields.map(f => <option key={f} value={f}>Σ {f}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
               <div className="border border-gray-200 rounded overflow-auto max-h-[35vh]">
-                {previewRows.length === 0 ? (
+                {rangeMode === "range" && pivot ? (
+                  pivot.rows.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-gray-400">No entries in the selected range.</div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50 text-gray-500 sticky top-0">
+                        <tr>
+                          <th className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">Employee</th>
+                          <th className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">Name</th>
+                          {pivot.periodLabels.map(l => (
+                            <th key={l} className="text-right font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">{l}</th>
+                          ))}
+                          <th className="text-right font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap bg-emerald-50">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pivot.rows.map((r, i) => (
+                          <tr key={i} className="border-b border-gray-100">
+                            <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap font-mono text-[11px]">{r.Employee}</td>
+                            <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{r.Name || "—"}</td>
+                            {pivot.periodLabels.map(l => (
+                              <td key={l} className={`px-3 py-1.5 text-right whitespace-nowrap ${r[l] ? "text-gray-800" : "text-gray-300"}`}>{r[l] || 0}</td>
+                            ))}
+                            <td className="px-3 py-1.5 text-right whitespace-nowrap font-semibold text-emerald-700 bg-emerald-50/50">{r.Total}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
+                ) : previewRows.length === 0 ? (
                   <div className="p-6 text-center text-xs text-gray-400">
                     {employeeField ? "No entries in this period." : "Pick an employee field to preview the payroll table."}
                   </div>
@@ -760,8 +803,11 @@ function Index() {
                 )}
               </div>
               <div className="text-[11px] text-gray-500">
-                {previewRows.length} employee{previewRows.length === 1 ? "" : "s"} · {totalPeriodEntries} entries in scope
+                {rangeMode === "range" && pivot
+                  ? `${pivot.rows.length} employee${pivot.rows.length === 1 ? "" : "s"} · ${periods.length} period${periods.length === 1 ? "" : "s"} · ${totalPeriodEntries} entries in scope`
+                  : `${previewRows.length} employee${previewRows.length === 1 ? "" : "s"} · ${totalPeriodEntries} entries in scope`}
               </div>
+
             </div>
             <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-200 bg-gray-50">
               <button onClick={() => setPayrollOpen(false)} className="text-xs px-3 py-1.5 text-gray-600 hover:text-gray-900">Cancel</button>
