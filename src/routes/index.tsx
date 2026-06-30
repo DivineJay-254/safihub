@@ -145,6 +145,9 @@ function Index() {
   const [fromMonth, setFromMonth] = useState<string>("0");
   const [toYear, setToYear] = useState<string>(String(now.getFullYear()));
   const [toMonth, setToMonth] = useState<string>(String(now.getMonth()));
+  const [pivotMetric, setPivotMetric] = useState<string>("entries");
+
+
 
 
   const collectionsQ = useQuery({ queryKey: ["fs", "collections"], queryFn: () => getCols() });
