@@ -237,27 +237,55 @@ function Index() {
   };
 
   // -------- Payroll template --------
-  const payrollRows = useMemo(() => {
+  // Build a list of {label, year, month|null, docs[]} periods based on rangeMode.
+  // rangeMode "current" -> uses toolbar filters on `filtered`.
+  // rangeMode "range"   -> iterates months from (fromYear,fromMonth) to (toYear,toMonth), pulling from `docs`.
+  // rangeMode "all"     -> single period containing every doc in the collection.
+  type Period = { label: string; year: number | null; month: number | null; docs: any[] };
+
+  const periods = useMemo<Period[]>(() => {
+    if (rangeMode === "current") {
+      const label = `${filterMonth ? MONTHS[Number(filterMonth)] : "All months"} ${filterYear || "All years"}`;
+      return [{ label, year: filterYear ? Number(filterYear) : null, month: filterMonth ? Number(filterMonth) : null, docs: filtered }];
+    }
+    if (rangeMode === "all") {
+      return [{ label: `All time (${docs.length} entries)`, year: null, month: null, docs }];
+    }
+    // range
+    const fy = Number(fromYear), fm = Number(fromMonth);
+    const ty = Number(toYear), tm = Number(toMonth);
+    const out: Period[] = [];
+    let y = fy, m = fm;
+    let guard = 0;
+    while ((y < ty || (y === ty && m <= tm)) && guard++ < 240) {
+      const monthDocs = docs.filter(d => {
+        const dt = parseDate(getFieldValue(d, payrollDateField));
+        return dt && dt.getFullYear() === y && dt.getMonth() === m;
+      });
+      out.push({ label: `${MONTHS[m]} ${y}`, year: y, month: m, docs: monthDocs });
+      m++; if (m > 11) { m = 0; y++; }
+    }
+    return out;
+  }, [rangeMode, filtered, filterYear, filterMonth, docs, fromYear, fromMonth, toYear, toMonth, payrollDateField]);
+
+  function buildPayrollRows(periodDocs: any[], periodLabel: string): Record<string, any>[] {
     if (!employeeField) return [];
     const groups = new Map<string, any[]>();
-    for (const d of filtered) {
+    for (const d of periodDocs) {
       const key = String(d.data?.[employeeField] ?? "(unknown)");
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(d);
     }
-    const period = `${filterMonth ? MONTHS[Number(filterMonth)] : "All months"} ${filterYear || "All years"}`;
     const rows: Record<string, any>[] = [];
     for (const [emp, entries] of groups) {
-      // find name/email if employee field is an id
       const sample = entries[0]?.data ?? {};
       const row: Record<string, any> = {
         Employee: emp,
         Name: sample.name ?? sample.employeeName ?? sample.fullName ?? "",
         Email: sample.email ?? "",
-        Period: period,
+        Period: periodLabel,
         Entries: entries.length,
       };
-      // unique work days based on payroll date field
       const days = new Set<string>();
       let firstDate: Date | null = null, lastDate: Date | null = null;
       for (const e of entries) {
@@ -271,7 +299,6 @@ function Index() {
       row["Days Worked"] = days.size;
       row["First Entry"] = firstDate ? firstDate.toISOString().slice(0, 10) : "";
       row["Last Entry"] = lastDate ? lastDate.toISOString().slice(0, 10) : "";
-      // sum numeric fields (hours, amount, etc.)
       for (const nf of numericFields) {
         let sum = 0; let any = false;
         for (const e of entries) {
@@ -284,26 +311,60 @@ function Index() {
     }
     rows.sort((a, b) => String(a.Employee).localeCompare(String(b.Employee)));
     return rows;
-  }, [filtered, employeeField, payrollDateField, numericFields, filterMonth, filterYear]);
+  }
+
+  // preview = first period (or combined when in current/all)
+  const previewRows = useMemo(() => {
+    if (!periods.length) return [];
+    if (rangeMode === "range") {
+      // combined preview across all months
+      const all = periods.flatMap(p => p.docs);
+      return buildPayrollRows(all, `${periods[0]?.label} → ${periods[periods.length - 1]?.label}`);
+    }
+    return buildPayrollRows(periods[0].docs, periods[0].label);
+  }, [periods, employeeField, payrollDateField, numericFields, rangeMode]);
+
+  const totalPeriodEntries = useMemo(() => periods.reduce((s, p) => s + p.docs.length, 0), [periods]);
 
   const payrollName = () => {
     const parts = ["payroll", selected ?? ""];
-    if (filterYear) parts.push(filterYear);
-    if (filterMonth) parts.push(MONTHS[Number(filterMonth)]);
+    if (rangeMode === "current") {
+      if (filterYear) parts.push(filterYear);
+      if (filterMonth) parts.push(MONTHS[Number(filterMonth)]);
+    } else if (rangeMode === "range") {
+      parts.push(`${MONTHS[Number(fromMonth)]}${fromYear}-${MONTHS[Number(toMonth)]}${toYear}`);
+    } else {
+      parts.push("all");
+    }
     return parts.filter(Boolean).join("_");
   };
   const exportPayrollCSV = () => {
-    download(new Blob([toCSV(payrollRows)], { type: "text/csv;charset=utf-8;" }), `${payrollName()}.csv`);
+    // CSV is flat — combine every period, include Period column
+    const all: Record<string, any>[] = [];
+    for (const p of periods) all.push(...buildPayrollRows(p.docs, p.label));
+    download(new Blob([toCSV(all)], { type: "text/csv;charset=utf-8;" }), `${payrollName()}.csv`);
   };
   const exportPayrollXLSX = () => {
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(payrollRows);
-    XLSX.utils.book_append_sheet(wb, ws, "Payroll Summary");
-    // detail sheet
-    const detail = filtered.map(flattenDoc);
+    // Combined summary across all periods
+    const combined: Record<string, any>[] = [];
+    for (const p of periods) combined.push(...buildPayrollRows(p.docs, p.label));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(combined), "Summary");
+    // One sheet per period (when more than one)
+    if (periods.length > 1) {
+      for (const p of periods) {
+        const rows = buildPayrollRows(p.docs, p.label);
+        if (!rows.length) continue;
+        const sheetName = p.label.replace(/[\\/?*[\]:]/g, "-").slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), sheetName);
+      }
+    }
+    // Entries detail (every doc in scope)
+    const detail = periods.flatMap(p => p.docs.map(d => ({ Period: p.label, ...flattenDoc(d) })));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), "Entries");
     XLSX.writeFile(wb, `${payrollName()}.xlsx`);
   };
+
 
   const SortHeader = ({ field, part = "full" as SortPart, label }: { field: string; part?: SortPart; label: string }) => {
     const active = sortField === field && sortPart === part;
