@@ -139,6 +139,13 @@ function Index() {
   const [payrollOpen, setPayrollOpen] = useState(false);
   const [employeeField, setEmployeeField] = useState<string>("");
   const [payrollDateField, setPayrollDateField] = useState<string>("createdAt");
+  const now = new Date();
+  const [rangeMode, setRangeMode] = useState<"current" | "range" | "all">("current");
+  const [fromYear, setFromYear] = useState<string>(String(now.getFullYear()));
+  const [fromMonth, setFromMonth] = useState<string>("0");
+  const [toYear, setToYear] = useState<string>(String(now.getFullYear()));
+  const [toMonth, setToMonth] = useState<string>(String(now.getMonth()));
+
 
   const collectionsQ = useQuery({ queryKey: ["fs", "collections"], queryFn: () => getCols() });
   const docsQ = useQuery({
