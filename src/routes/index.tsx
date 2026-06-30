@@ -145,6 +145,9 @@ function Index() {
   const [fromMonth, setFromMonth] = useState<string>("0");
   const [toYear, setToYear] = useState<string>(String(now.getFullYear()));
   const [toMonth, setToMonth] = useState<string>(String(now.getMonth()));
+  const [pivotMetric, setPivotMetric] = useState<string>("entries");
+
+
 
 
   const collectionsQ = useQuery({ queryKey: ["fs", "collections"], queryFn: () => getCols() });
@@ -324,7 +327,45 @@ function Index() {
     return buildPayrollRows(periods[0].docs, periods[0].label);
   }, [periods, employeeField, payrollDateField, numericFields, rangeMode]);
 
+  // Pivot: rows = employees, columns = period labels, cell = entries count or sum of a numeric field
+  const pivot = useMemo(() => {
+    if (rangeMode !== "range" || !employeeField || !periods.length) return null;
+    const empSet = new Set<string>();
+    const empMeta = new Map<string, { name: string; email: string }>();
+    const cells = new Map<string, Map<string, number>>(); // emp -> period -> value
+    for (const p of periods) {
+      for (const d of p.docs) {
+        const emp = String(d.data?.[employeeField] ?? "(unknown)");
+        empSet.add(emp);
+        if (!empMeta.has(emp)) {
+          const s = d.data ?? {};
+          empMeta.set(emp, { name: s.name ?? s.employeeName ?? s.fullName ?? "", email: s.email ?? "" });
+        }
+        if (!cells.has(emp)) cells.set(emp, new Map());
+        const row = cells.get(emp)!;
+        const prev = row.get(p.label) ?? 0;
+        const add = pivotMetric === "entries" ? 1 : (typeof d.data?.[pivotMetric] === "number" ? d.data[pivotMetric] : 0);
+        row.set(p.label, prev + add);
+      }
+    }
+    const employees = Array.from(empSet).sort();
+    const rows = employees.map(emp => {
+      const meta = empMeta.get(emp)!;
+      const row: Record<string, any> = { Employee: emp, Name: meta.name, Email: meta.email };
+      let total = 0;
+      for (const p of periods) {
+        const v = cells.get(emp)?.get(p.label) ?? 0;
+        row[p.label] = pivotMetric === "entries" ? v : Number(v.toFixed(2));
+        total += v;
+      }
+      row.Total = pivotMetric === "entries" ? total : Number(total.toFixed(2));
+      return row;
+    });
+    return { rows, periodLabels: periods.map(p => p.label) };
+  }, [rangeMode, periods, employeeField, pivotMetric]);
+
   const totalPeriodEntries = useMemo(() => periods.reduce((s, p) => s + p.docs.length, 0), [periods]);
+
 
   const payrollName = () => {
     const parts = ["payroll", selected ?? ""];
@@ -698,8 +739,51 @@ function Index() {
                 </div>
               )}
 
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <div className="text-[11px] font-semibold tracking-wider text-gray-500">PREVIEW</div>
+                {rangeMode === "range" && pivot && (
+                  <div className="flex items-center gap-1 text-[11px] text-gray-500">
+                    <span>Cell value:</span>
+                    <select value={pivotMetric} onChange={e => setPivotMetric(e.target.value)}
+                      className="text-xs border border-gray-200 rounded px-1.5 py-1 bg-gray-50">
+                      <option value="entries">Entries count</option>
+                      {numericFields.map(f => <option key={f} value={f}>Σ {f}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
               <div className="border border-gray-200 rounded overflow-auto max-h-[35vh]">
-                {previewRows.length === 0 ? (
+                {rangeMode === "range" && pivot ? (
+                  pivot.rows.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-gray-400">No entries in the selected range.</div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50 text-gray-500 sticky top-0">
+                        <tr>
+                          <th className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">Employee</th>
+                          <th className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">Name</th>
+                          {pivot.periodLabels.map(l => (
+                            <th key={l} className="text-right font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">{l}</th>
+                          ))}
+                          <th className="text-right font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap bg-emerald-50">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pivot.rows.map((r, i) => (
+                          <tr key={i} className="border-b border-gray-100">
+                            <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap font-mono text-[11px]">{r.Employee}</td>
+                            <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{r.Name || "—"}</td>
+                            {pivot.periodLabels.map(l => (
+                              <td key={l} className={`px-3 py-1.5 text-right whitespace-nowrap ${r[l] ? "text-gray-800" : "text-gray-300"}`}>{r[l] || 0}</td>
+                            ))}
+                            <td className="px-3 py-1.5 text-right whitespace-nowrap font-semibold text-emerald-700 bg-emerald-50/50">{r.Total}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
+                ) : previewRows.length === 0 ? (
                   <div className="p-6 text-center text-xs text-gray-400">
                     {employeeField ? "No entries in this period." : "Pick an employee field to preview the payroll table."}
                   </div>
@@ -719,8 +803,11 @@ function Index() {
                 )}
               </div>
               <div className="text-[11px] text-gray-500">
-                {previewRows.length} employee{previewRows.length === 1 ? "" : "s"} · {totalPeriodEntries} entries in scope
+                {rangeMode === "range" && pivot
+                  ? `${pivot.rows.length} employee${pivot.rows.length === 1 ? "" : "s"} · ${periods.length} period${periods.length === 1 ? "" : "s"} · ${totalPeriodEntries} entries in scope`
+                  : `${previewRows.length} employee${previewRows.length === 1 ? "" : "s"} · ${totalPeriodEntries} entries in scope`}
               </div>
+
             </div>
             <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-200 bg-gray-50">
               <button onClick={() => setPayrollOpen(false)} className="text-xs px-3 py-1.5 text-gray-600 hover:text-gray-900">Cancel</button>
