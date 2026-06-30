@@ -139,6 +139,13 @@ function Index() {
   const [payrollOpen, setPayrollOpen] = useState(false);
   const [employeeField, setEmployeeField] = useState<string>("");
   const [payrollDateField, setPayrollDateField] = useState<string>("createdAt");
+  const now = new Date();
+  const [rangeMode, setRangeMode] = useState<"current" | "range" | "all">("current");
+  const [fromYear, setFromYear] = useState<string>(String(now.getFullYear()));
+  const [fromMonth, setFromMonth] = useState<string>("0");
+  const [toYear, setToYear] = useState<string>(String(now.getFullYear()));
+  const [toMonth, setToMonth] = useState<string>(String(now.getMonth()));
+
 
   const collectionsQ = useQuery({ queryKey: ["fs", "collections"], queryFn: () => getCols() });
   const docsQ = useQuery({
@@ -230,27 +237,55 @@ function Index() {
   };
 
   // -------- Payroll template --------
-  const payrollRows = useMemo(() => {
+  // Build a list of {label, year, month|null, docs[]} periods based on rangeMode.
+  // rangeMode "current" -> uses toolbar filters on `filtered`.
+  // rangeMode "range"   -> iterates months from (fromYear,fromMonth) to (toYear,toMonth), pulling from `docs`.
+  // rangeMode "all"     -> single period containing every doc in the collection.
+  type Period = { label: string; year: number | null; month: number | null; docs: any[] };
+
+  const periods = useMemo<Period[]>(() => {
+    if (rangeMode === "current") {
+      const label = `${filterMonth ? MONTHS[Number(filterMonth)] : "All months"} ${filterYear || "All years"}`;
+      return [{ label, year: filterYear ? Number(filterYear) : null, month: filterMonth ? Number(filterMonth) : null, docs: filtered }];
+    }
+    if (rangeMode === "all") {
+      return [{ label: `All time (${docs.length} entries)`, year: null, month: null, docs }];
+    }
+    // range
+    const fy = Number(fromYear), fm = Number(fromMonth);
+    const ty = Number(toYear), tm = Number(toMonth);
+    const out: Period[] = [];
+    let y = fy, m = fm;
+    let guard = 0;
+    while ((y < ty || (y === ty && m <= tm)) && guard++ < 240) {
+      const monthDocs = docs.filter(d => {
+        const dt = parseDate(getFieldValue(d, payrollDateField));
+        return dt && dt.getFullYear() === y && dt.getMonth() === m;
+      });
+      out.push({ label: `${MONTHS[m]} ${y}`, year: y, month: m, docs: monthDocs });
+      m++; if (m > 11) { m = 0; y++; }
+    }
+    return out;
+  }, [rangeMode, filtered, filterYear, filterMonth, docs, fromYear, fromMonth, toYear, toMonth, payrollDateField]);
+
+  function buildPayrollRows(periodDocs: any[], periodLabel: string): Record<string, any>[] {
     if (!employeeField) return [];
     const groups = new Map<string, any[]>();
-    for (const d of filtered) {
+    for (const d of periodDocs) {
       const key = String(d.data?.[employeeField] ?? "(unknown)");
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(d);
     }
-    const period = `${filterMonth ? MONTHS[Number(filterMonth)] : "All months"} ${filterYear || "All years"}`;
     const rows: Record<string, any>[] = [];
     for (const [emp, entries] of groups) {
-      // find name/email if employee field is an id
       const sample = entries[0]?.data ?? {};
       const row: Record<string, any> = {
         Employee: emp,
         Name: sample.name ?? sample.employeeName ?? sample.fullName ?? "",
         Email: sample.email ?? "",
-        Period: period,
+        Period: periodLabel,
         Entries: entries.length,
       };
-      // unique work days based on payroll date field
       const days = new Set<string>();
       let firstDate: Date | null = null, lastDate: Date | null = null;
       for (const e of entries) {
@@ -264,7 +299,6 @@ function Index() {
       row["Days Worked"] = days.size;
       row["First Entry"] = firstDate ? firstDate.toISOString().slice(0, 10) : "";
       row["Last Entry"] = lastDate ? lastDate.toISOString().slice(0, 10) : "";
-      // sum numeric fields (hours, amount, etc.)
       for (const nf of numericFields) {
         let sum = 0; let any = false;
         for (const e of entries) {
@@ -277,26 +311,60 @@ function Index() {
     }
     rows.sort((a, b) => String(a.Employee).localeCompare(String(b.Employee)));
     return rows;
-  }, [filtered, employeeField, payrollDateField, numericFields, filterMonth, filterYear]);
+  }
+
+  // preview = first period (or combined when in current/all)
+  const previewRows = useMemo(() => {
+    if (!periods.length) return [];
+    if (rangeMode === "range") {
+      // combined preview across all months
+      const all = periods.flatMap(p => p.docs);
+      return buildPayrollRows(all, `${periods[0]?.label} → ${periods[periods.length - 1]?.label}`);
+    }
+    return buildPayrollRows(periods[0].docs, periods[0].label);
+  }, [periods, employeeField, payrollDateField, numericFields, rangeMode]);
+
+  const totalPeriodEntries = useMemo(() => periods.reduce((s, p) => s + p.docs.length, 0), [periods]);
 
   const payrollName = () => {
     const parts = ["payroll", selected ?? ""];
-    if (filterYear) parts.push(filterYear);
-    if (filterMonth) parts.push(MONTHS[Number(filterMonth)]);
+    if (rangeMode === "current") {
+      if (filterYear) parts.push(filterYear);
+      if (filterMonth) parts.push(MONTHS[Number(filterMonth)]);
+    } else if (rangeMode === "range") {
+      parts.push(`${MONTHS[Number(fromMonth)]}${fromYear}-${MONTHS[Number(toMonth)]}${toYear}`);
+    } else {
+      parts.push("all");
+    }
     return parts.filter(Boolean).join("_");
   };
   const exportPayrollCSV = () => {
-    download(new Blob([toCSV(payrollRows)], { type: "text/csv;charset=utf-8;" }), `${payrollName()}.csv`);
+    // CSV is flat — combine every period, include Period column
+    const all: Record<string, any>[] = [];
+    for (const p of periods) all.push(...buildPayrollRows(p.docs, p.label));
+    download(new Blob([toCSV(all)], { type: "text/csv;charset=utf-8;" }), `${payrollName()}.csv`);
   };
   const exportPayrollXLSX = () => {
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(payrollRows);
-    XLSX.utils.book_append_sheet(wb, ws, "Payroll Summary");
-    // detail sheet
-    const detail = filtered.map(flattenDoc);
+    // Combined summary across all periods
+    const combined: Record<string, any>[] = [];
+    for (const p of periods) combined.push(...buildPayrollRows(p.docs, p.label));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(combined), "Summary");
+    // One sheet per period (when more than one)
+    if (periods.length > 1) {
+      for (const p of periods) {
+        const rows = buildPayrollRows(p.docs, p.label);
+        if (!rows.length) continue;
+        const sheetName = p.label.replace(/[\\/?*[\]:]/g, "-").slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), sheetName);
+      }
+    }
+    // Entries detail (every doc in scope)
+    const detail = periods.flatMap(p => p.docs.map(d => ({ Period: p.label, ...flattenDoc(d) })));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), "Entries");
     XLSX.writeFile(wb, `${payrollName()}.xlsx`);
   };
+
 
   const SortHeader = ({ field, part = "full" as SortPart, label }: { field: string; part?: SortPart; label: string }) => {
     const active = sortField === field && sortPart === part;
@@ -556,7 +624,7 @@ function Index() {
               <button onClick={() => setPayrollOpen(false)} className="ml-auto p-1 text-gray-400 hover:text-gray-700"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-3 overflow-auto">
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] text-gray-500 mb-1">Group by (employee field)</label>
                   <select value={employeeField} onChange={e => setEmployeeField(e.target.value)} className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50">
@@ -570,52 +638,104 @@ function Index() {
                     {dateFields.map(f => <option key={f} value={f}>{f}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-[11px] text-gray-500 mb-1">Period</label>
-                  <div className="text-xs text-gray-800 px-2 py-1.5 bg-gray-50 border border-gray-200 rounded">
-                    {filterMonth ? MONTHS[Number(filterMonth)] : "All months"} · {filterYear || "All years"}
-                  </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-500 mb-1">Period scope</label>
+                <div className="flex flex-wrap gap-1 text-xs">
+                  {([
+                    ["current", "Toolbar filter"],
+                    ["range", "Custom month range"],
+                    ["all", "Whole collection"],
+                  ] as const).map(([v, l]) => (
+                    <button key={v} onClick={() => setRangeMode(v)}
+                      className={`px-3 py-1.5 rounded border ${rangeMode === v ? "bg-emerald-600 text-white border-emerald-600" : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"}`}>
+                      {l}
+                    </button>
+                  ))}
                 </div>
               </div>
-              {!filterYear && !filterMonth && (
-                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                  Tip: pick a Year and Month in the toolbar to scope this to a single pay period.
+
+              {rangeMode === "current" && (
+                <div className="text-xs text-gray-700 px-2 py-1.5 bg-gray-50 border border-gray-200 rounded">
+                  Using toolbar filter: {filterMonth ? MONTHS[Number(filterMonth)] : "All months"} · {filterYear || "All years"}
                 </div>
               )}
 
-              <div className="border border-gray-200 rounded overflow-auto max-h-[40vh]">
-                {payrollRows.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-gray-400">Pick an employee field to preview the payroll table.</div>
+              {rangeMode === "range" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-gray-500 mb-1">From</label>
+                    <div className="flex gap-1">
+                      <select value={fromMonth} onChange={e => setFromMonth(e.target.value)} className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50">
+                        {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                      </select>
+                      <input type="number" value={fromYear} onChange={e => setFromYear(e.target.value)}
+                        className="w-20 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-gray-500 mb-1">To</label>
+                    <div className="flex gap-1">
+                      <select value={toMonth} onChange={e => setToMonth(e.target.value)} className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50">
+                        {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                      </select>
+                      <input type="number" value={toYear} onChange={e => setToYear(e.target.value)}
+                        className="w-20 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {rangeMode === "range" && periods.length > 0 && (
+                <div className="text-[11px] text-gray-600 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                  Will export <b>{periods.length}</b> month{periods.length === 1 ? "" : "s"} — one sheet per month plus a combined Summary.
+                </div>
+              )}
+              {rangeMode === "all" && (
+                <div className="text-[11px] text-gray-600 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                  Exporting the whole <b>{selected}</b> collection — all {docs.length} entries grouped per employee.
+                </div>
+              )}
+
+              <div className="border border-gray-200 rounded overflow-auto max-h-[35vh]">
+                {previewRows.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-gray-400">
+                    {employeeField ? "No entries in this period." : "Pick an employee field to preview the payroll table."}
+                  </div>
                 ) : (
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50 text-gray-500 sticky top-0">
-                      <tr>{Object.keys(payrollRows[0]).map(k => <th key={k} className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">{k}</th>)}</tr>
+                      <tr>{Object.keys(previewRows[0]).map(k => <th key={k} className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">{k}</th>)}</tr>
                     </thead>
                     <tbody>
-                      {payrollRows.map((r, i) => (
+                      {previewRows.map((r, i) => (
                         <tr key={i} className="border-b border-gray-100">
-                          {Object.keys(payrollRows[0]).map(k => <td key={k} className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{String(r[k] ?? "")}</td>)}
+                          {Object.keys(previewRows[0]).map(k => <td key={k} className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{String(r[k] ?? "")}</td>)}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
               </div>
-              <div className="text-[11px] text-gray-500">{payrollRows.length} employee{payrollRows.length === 1 ? "" : "s"} · {filtered.length} entries</div>
+              <div className="text-[11px] text-gray-500">
+                {previewRows.length} employee{previewRows.length === 1 ? "" : "s"} · {totalPeriodEntries} entries in scope
+              </div>
             </div>
             <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-200 bg-gray-50">
               <button onClick={() => setPayrollOpen(false)} className="text-xs px-3 py-1.5 text-gray-600 hover:text-gray-900">Cancel</button>
               <div className="ml-auto flex gap-2">
-                <button onClick={exportPayrollCSV} disabled={!payrollRows.length}
+                <button onClick={exportPayrollCSV} disabled={!previewRows.length}
                   className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5">
                   <FileText size={12} className="text-blue-600" /> CSV
                 </button>
-                <button onClick={exportPayrollXLSX} disabled={!payrollRows.length}
+                <button onClick={exportPayrollXLSX} disabled={!previewRows.length}
                   className="text-xs px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5">
-                  <FileSpreadsheet size={12} /> Excel (Summary + Entries)
+                  <FileSpreadsheet size={12} /> Excel ({rangeMode === "range" ? "Summary + per month" : "Summary + Entries"})
                 </button>
               </div>
             </div>
+
           </div>
         </div>
       )}
