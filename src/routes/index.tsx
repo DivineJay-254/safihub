@@ -624,7 +624,7 @@ function Index() {
               <button onClick={() => setPayrollOpen(false)} className="ml-auto p-1 text-gray-400 hover:text-gray-700"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-3 overflow-auto">
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] text-gray-500 mb-1">Group by (employee field)</label>
                   <select value={employeeField} onChange={e => setEmployeeField(e.target.value)} className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50">
@@ -638,52 +638,104 @@ function Index() {
                     {dateFields.map(f => <option key={f} value={f}>{f}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-[11px] text-gray-500 mb-1">Period</label>
-                  <div className="text-xs text-gray-800 px-2 py-1.5 bg-gray-50 border border-gray-200 rounded">
-                    {filterMonth ? MONTHS[Number(filterMonth)] : "All months"} · {filterYear || "All years"}
-                  </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-500 mb-1">Period scope</label>
+                <div className="flex flex-wrap gap-1 text-xs">
+                  {([
+                    ["current", "Toolbar filter"],
+                    ["range", "Custom month range"],
+                    ["all", "Whole collection"],
+                  ] as const).map(([v, l]) => (
+                    <button key={v} onClick={() => setRangeMode(v)}
+                      className={`px-3 py-1.5 rounded border ${rangeMode === v ? "bg-emerald-600 text-white border-emerald-600" : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"}`}>
+                      {l}
+                    </button>
+                  ))}
                 </div>
               </div>
-              {!filterYear && !filterMonth && (
-                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                  Tip: pick a Year and Month in the toolbar to scope this to a single pay period.
+
+              {rangeMode === "current" && (
+                <div className="text-xs text-gray-700 px-2 py-1.5 bg-gray-50 border border-gray-200 rounded">
+                  Using toolbar filter: {filterMonth ? MONTHS[Number(filterMonth)] : "All months"} · {filterYear || "All years"}
                 </div>
               )}
 
-              <div className="border border-gray-200 rounded overflow-auto max-h-[40vh]">
-                {payrollRows.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-gray-400">Pick an employee field to preview the payroll table.</div>
+              {rangeMode === "range" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-gray-500 mb-1">From</label>
+                    <div className="flex gap-1">
+                      <select value={fromMonth} onChange={e => setFromMonth(e.target.value)} className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50">
+                        {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                      </select>
+                      <input type="number" value={fromYear} onChange={e => setFromYear(e.target.value)}
+                        className="w-20 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-gray-500 mb-1">To</label>
+                    <div className="flex gap-1">
+                      <select value={toMonth} onChange={e => setToMonth(e.target.value)} className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50">
+                        {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                      </select>
+                      <input type="number" value={toYear} onChange={e => setToYear(e.target.value)}
+                        className="w-20 text-xs border border-gray-200 rounded px-2 py-1.5 bg-gray-50" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {rangeMode === "range" && periods.length > 0 && (
+                <div className="text-[11px] text-gray-600 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                  Will export <b>{periods.length}</b> month{periods.length === 1 ? "" : "s"} — one sheet per month plus a combined Summary.
+                </div>
+              )}
+              {rangeMode === "all" && (
+                <div className="text-[11px] text-gray-600 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                  Exporting the whole <b>{selected}</b> collection — all {docs.length} entries grouped per employee.
+                </div>
+              )}
+
+              <div className="border border-gray-200 rounded overflow-auto max-h-[35vh]">
+                {previewRows.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-gray-400">
+                    {employeeField ? "No entries in this period." : "Pick an employee field to preview the payroll table."}
+                  </div>
                 ) : (
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50 text-gray-500 sticky top-0">
-                      <tr>{Object.keys(payrollRows[0]).map(k => <th key={k} className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">{k}</th>)}</tr>
+                      <tr>{Object.keys(previewRows[0]).map(k => <th key={k} className="text-left font-medium px-3 py-2 border-b border-gray-200 whitespace-nowrap">{k}</th>)}</tr>
                     </thead>
                     <tbody>
-                      {payrollRows.map((r, i) => (
+                      {previewRows.map((r, i) => (
                         <tr key={i} className="border-b border-gray-100">
-                          {Object.keys(payrollRows[0]).map(k => <td key={k} className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{String(r[k] ?? "")}</td>)}
+                          {Object.keys(previewRows[0]).map(k => <td key={k} className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{String(r[k] ?? "")}</td>)}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
               </div>
-              <div className="text-[11px] text-gray-500">{payrollRows.length} employee{payrollRows.length === 1 ? "" : "s"} · {filtered.length} entries</div>
+              <div className="text-[11px] text-gray-500">
+                {previewRows.length} employee{previewRows.length === 1 ? "" : "s"} · {totalPeriodEntries} entries in scope
+              </div>
             </div>
             <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-200 bg-gray-50">
               <button onClick={() => setPayrollOpen(false)} className="text-xs px-3 py-1.5 text-gray-600 hover:text-gray-900">Cancel</button>
               <div className="ml-auto flex gap-2">
-                <button onClick={exportPayrollCSV} disabled={!payrollRows.length}
+                <button onClick={exportPayrollCSV} disabled={!previewRows.length}
                   className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5">
                   <FileText size={12} className="text-blue-600" /> CSV
                 </button>
-                <button onClick={exportPayrollXLSX} disabled={!payrollRows.length}
+                <button onClick={exportPayrollXLSX} disabled={!previewRows.length}
                   className="text-xs px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5">
-                  <FileSpreadsheet size={12} /> Excel (Summary + Entries)
+                  <FileSpreadsheet size={12} /> Excel ({rangeMode === "range" ? "Summary + per month" : "Summary + Entries"})
                 </button>
               </div>
             </div>
+
           </div>
         </div>
       )}
